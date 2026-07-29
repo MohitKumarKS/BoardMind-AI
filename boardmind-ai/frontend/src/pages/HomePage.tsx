@@ -78,7 +78,7 @@ function HomePage() {
           <span className="home__feature-label">Business Categories</span>
         </div>
         <div className="home__feature">
-          <span className="home__feature-number">&lt;2s</span>
+          <span className="home__feature-number">&lt;100s</span>
           <span className="home__feature-label">Analysis Time</span>
         </div>
         <div className="home__feature">

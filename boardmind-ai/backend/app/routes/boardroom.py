@@ -60,7 +60,7 @@ async def orchestrate(request: OrchestratorRequest) -> OrchestratorResponse:
 
 
 @router.post("/consensus", response_model=ConsensusResult)
-def run_consensus(request: ConsensusRequest) -> ConsensusResult:
+async def run_consensus(request: ConsensusRequest) -> ConsensusResult:
     """Run the Consensus Engine on a completed orchestration session.
 
     Analyzes all department responses in the Board Context and produces:
@@ -70,9 +70,39 @@ def run_consensus(request: ConsensusRequest) -> ConsensusResult:
     - Executive summary
 
     The session must have been created via /api/boardroom/orchestrate first.
+    After consensus, results are persisted to MCP Knowledge Hub (if configured).
     """
     try:
-        return consensus_engine.analyze(request.session_id)
+        result = consensus_engine.analyze(request.session_id)
+
+        # Persist to MCP Knowledge Hub (non-blocking, fails gracefully)
+        try:
+            from app.mcp_hub.integration import persist_meeting_results
+
+            # Get the board context for this session
+            ctx = orchestrator.board_context.get_context(request.session_id)
+            if ctx:
+                agent_responses = [
+                    {
+                        "agent_id": aid,
+                        "status": ar.status,
+                        "response": ar.response,
+                    }
+                    for aid, ar in ctx.agent_results.items()
+                ]
+
+                await persist_meeting_results(
+                    session_id=request.session_id,
+                    scenario=ctx.scenario,
+                    business_category=ctx.business_category,
+                    agent_responses=agent_responses,
+                    consensus_result=result.model_dump(),
+                    optional_context=ctx.optional_context,
+                )
+        except Exception:
+            pass  # Non-fatal — hub persistence is optional
+
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

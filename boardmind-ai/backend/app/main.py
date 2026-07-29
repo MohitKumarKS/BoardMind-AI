@@ -10,6 +10,7 @@ _env_path = Path(__file__).resolve().parent.parent / ".env"
 load_dotenv(_env_path)
 
 from app.routes import sessions, agents, reports, workspace, decision_router, boardroom, mcp
+from app.routes import knowledge_hub
 
 app = FastAPI(
     title="BoardMind AI",
@@ -32,6 +33,14 @@ app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(mcp.router, prefix="/api/mcp", tags=["mcp"])
+app.include_router(knowledge_hub.router, prefix="/api/knowledge-hub", tags=["knowledge-hub"])
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize optional services on startup."""
+    from app.mcp_hub.database import init_database
+    await init_database()
 
 
 @app.get("/api/health")

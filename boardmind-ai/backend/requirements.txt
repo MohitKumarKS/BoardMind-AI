@@ -9,3 +9,5 @@ openpyxl>=3.1.0
 python-multipart>=0.0.9
 groq>=1.0.0
 python-dotenv>=1.0.0
+sqlalchemy[asyncio]>=2.0.0
+asyncpg>=0.29.0
