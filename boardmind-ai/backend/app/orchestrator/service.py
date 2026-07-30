@@ -1,11 +1,11 @@
 """Executive Orchestrator service.
 
-Coordinates the execution of multiple department agents using
-wave-based scheduling to stay within Groq TPM rate limits:
+Coordinates the execution of multiple department agents using a
+dynamic worker pool architecture for maximum throughput:
 1. Invokes the Decision Router to determine relevant agents
 2. Creates a Board Context session
-3. Executes agents in sequential waves (parallel within wave)
-4. Applies dynamic inter-wave delay if rate limits are detected
+3. Builds prioritized task queue for all selected agents
+4. Executes via async worker pool with API key load balancing
 5. Updates Board Context after each agent completes
 6. Finalizes the session and returns results
 
@@ -15,7 +15,6 @@ It is purely a coordination layer and the ONLY writer to Board Context.
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from typing import Any
@@ -51,13 +50,6 @@ from .schema import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Wave configuration (configurable via env vars)
-WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "4"))
-INTER_WAVE_BASE_DELAY = float(os.environ.get("INTER_WAVE_DELAY", "5.0"))
-RATE_LIMIT_EXTRA_DELAY = 10.0
-AGENT_TIMEOUT_SECONDS = float(os.environ.get("AGENT_TIMEOUT", "45.0"))
-INTRA_WAVE_STAGGER = float(os.environ.get("INTRA_WAVE_STAGGER", "0.5"))
 
 # Domain-specific evidence keywords for filtering
 DOMAIN_EVIDENCE_KEYWORDS: dict[str, list[str]] = {
@@ -126,10 +118,10 @@ def _filter_evidence_for_agent(context: str | None, agent_id: str) -> str | None
 
 
 class ExecutiveOrchestratorService:
-    """Coordinates wave-based execution of department agents.
+    """Coordinates dynamic worker pool execution of department agents.
 
-    Uses sequential waves to respect Groq TPM limits while maintaining
-    parallelism within each wave.
+    Uses a priority queue and async worker pool for maximum throughput
+    with automatic API key load balancing and retry logic.
 
     Usage:
         service = ExecutiveOrchestratorService()
@@ -161,7 +153,6 @@ class ExecutiveOrchestratorService:
             "innovation": (InnovationAgentService(), InnovationAgentRequest),
             "investor_relations": (InvestorRelationsAgentService(), InvestorRelationsAgentRequest),
         }
-        self._last_rate_limit_time: float = 0
 
     @property
     def board_context(self) -> BoardContextService:
@@ -169,27 +160,31 @@ class ExecutiveOrchestratorService:
         return self._board_context
 
     async def orchestrate(self, request: OrchestratorRequest) -> OrchestratorResponse:
-        """Execute the full orchestration workflow with wave-based scheduling.
+        """Execute the full orchestration workflow using dynamic worker pool.
 
-        All 20 agents execute by default (include_all_agents=True).
-        No agent is skipped. No early stopping. No partial consensus.
+        All selected agents execute via a priority queue and worker pool.
+        No agent is skipped. No wave-based delays. Maximum throughput.
         """
-        session_id = str(uuid.uuid4())
+        from app.orchestrator.api_key_manager import APIKeyManager
+        from app.orchestrator.worker_pool import WorkerPool, ExecutiveTask, PRIORITY_TIERS
 
-        # Step 1: Route the scenario (for category classification)
+        session_id = str(uuid.uuid4())
+        meeting_start = time.perf_counter()
+
+        # Step 1: Route the scenario
         router_request = DecisionRouterRequest(scenario=request.scenario)
         routing = self._router.route(router_request)
+        routing_time_ms = int((time.perf_counter() - meeting_start) * 1000)
 
-        # Step 2: Determine agent list — ALL 20 by default
+        # Step 2: Select agents (all 20 by default)
         if request.include_all_agents:
             selected_agents = list(self._agents.keys())
         else:
             selected_agents = routing.recommended_agents
 
         logger.info(
-            f"Session {session_id}: Category='{routing.business_category}', "
-            f"Selected={len(selected_agents)} agents "
-            f"({'full board' if request.include_all_agents else 'selective'})"
+            f"Session {session_id}: {routing.business_category}, "
+            f"{len(selected_agents)} agents selected, routing={routing_time_ms}ms"
         )
 
         # Step 3: Create Board Context session
@@ -201,63 +196,69 @@ class ExecutiveOrchestratorService:
             optional_context=request.optional_context,
         )
 
-        # Step 4: Wave-based execution — ALL agents execute, none skipped
-        start_time = time.perf_counter()
+        # Step 4: Build executive tasks with priority
+        tasks = []
+        for agent_id in selected_agents:
+            if agent_id not in self._agents:
+                continue
+            service, request_cls = self._agents[agent_id]
+            # Build request
+            kwargs: dict[str, Any] = {"scenario": request.scenario}
+            ctx = _filter_evidence_for_agent(request.optional_context, agent_id)
+            if ctx:
+                kwargs["context"] = ctx
+            agent_request = request_cls(**kwargs)
 
-        valid_agents = [
-            agent_id for agent_id in selected_agents
-            if agent_id in self._agents
-        ]
+            tasks.append(ExecutiveTask(
+                agent_id=agent_id,
+                priority=PRIORITY_TIERS.get(agent_id, 3),
+                service=service,
+                request=agent_request,
+            ))
 
-        logger.info(f"Session {session_id}: {len(valid_agents)} agents to execute")
+        # Step 5: Execute via Worker Pool
+        key_manager = APIKeyManager()
+        pool = WorkerPool(key_manager)
 
-        # Split into waves
-        waves = [valid_agents[i:i + WAVE_SIZE] for i in range(0, len(valid_agents), WAVE_SIZE)]
-        all_results: list[AgentExecutionResult] = []
-
-        for wave_idx, wave_agents in enumerate(waves):
-            # Dynamic inter-wave delay (skip for first wave)
-            if wave_idx > 0:
-                delay = self._calculate_inter_wave_delay()
-                logger.info(
-                    f"Session {session_id}: Wave {wave_idx + 1}/{len(waves)} — "
-                    f"waiting {delay:.1f}s before starting"
+        async def board_context_updater(agent_id, status, response, time_ms, error):
+            if status == "completed":
+                await self._board_context.update_agent_response(
+                    session_id=session_id, agent_id=agent_id,
+                    response=response, execution_time_ms=time_ms, status="completed",
                 )
-                await asyncio.sleep(delay)
-
-            logger.info(
-                f"Session {session_id}: Wave {wave_idx + 1}/{len(waves)} — "
-                f"executing {wave_agents}"
-            )
-
-            # Execute wave agents with staggered starts
-            tasks = []
-            for idx, agent_id in enumerate(wave_agents):
-                tasks.append(
-                    self._execute_agent_staggered(
-                        session_id, agent_id, request.scenario,
-                        _filter_evidence_for_agent(request.optional_context, agent_id),
-                        delay=INTRA_WAVE_STAGGER * idx,
-                    )
+            else:
+                await self._board_context.update_agent_response(
+                    session_id=session_id, agent_id=agent_id,
+                    response=None, execution_time_ms=time_ms,
+                    status=status, error=error,
                 )
 
-            # asyncio.gather — ALL tasks complete, none dropped
-            wave_results = await asyncio.gather(*tasks)
-            all_results.extend(wave_results)
+        # Mark all agents as started
+        for task in tasks:
+            await self._board_context.mark_agent_started(session_id, task.agent_id)
 
-            # Track rate limits for inter-wave delay
-            for r in wave_results:
-                if r.error and "429" in (r.error or ""):
-                    self._last_rate_limit_time = time.perf_counter()
+        results = await pool.execute_all(tasks, board_context_updater)
 
-        total_time_ms = int((time.perf_counter() - start_time) * 1000)
+        total_time_ms = int((time.perf_counter() - meeting_start) * 1000)
 
-        # Step 5: Finalize Board Context
+        # Step 6: Finalize
         await self._board_context.finalize_session(session_id, total_time_ms)
 
-        # Step 6: Build execution summary
-        completed = sum(1 for r in all_results if r.status == "completed")
-        failed = sum(1 for r in all_results if r.status != "completed")
+        # Step 7: Build response
+        completed = sum(1 for r in results if r.status == "completed")
+        failed = sum(1 for r in results if r.status != "completed")
+
+        # Convert to AgentExecutionResult
+        agent_results = [
+            AgentExecutionResult(
+                agent_id=r.agent_id,
+                response=r.response,
+                execution_time_ms=r.execution_time_ms,
+                status=r.status,
+                error=r.error,
+            )
+            for r in results
+        ]
 
         summary = ExecutionSummary(
             total_agents_selected=len(selected_agents),
@@ -269,13 +270,13 @@ class ExecutiveOrchestratorService:
         # Execution logging
         logger.info(
             f"Session {session_id}: COMPLETE — "
-            f"{completed}/{len(all_results)} succeeded, "
-            f"{failed} failed, "
-            f"{total_time_ms}ms total ({len(waves)} waves)"
+            f"{completed}/{len(results)} succeeded, {failed} failed, "
+            f"{total_time_ms}ms total | "
+            f"Keys: {key_manager.get_stats()}"
         )
         if failed > 0:
-            failed_ids = [r.agent_id for r in all_results if r.status != "completed"]
-            logger.warning(f"Session {session_id}: Failed agents: {failed_ids}")
+            failed_ids = [r.agent_id for r in results if r.status != "completed"]
+            logger.warning(f"Session {session_id}: Failed: {failed_ids}")
 
         return OrchestratorResponse(
             session_id=session_id,
@@ -283,133 +284,5 @@ class ExecutiveOrchestratorService:
             business_category=routing.business_category,
             selected_agents=selected_agents,
             execution_summary=summary,
-            responses=all_results,
+            responses=agent_results,
         )
-
-    def _calculate_inter_wave_delay(self) -> float:
-        """Calculate dynamic delay between waves.
-
-        If a recent 429 was detected, add extra delay.
-        Otherwise use the base delay.
-        """
-        now = time.perf_counter()
-        time_since_rate_limit = now - self._last_rate_limit_time
-
-        if time_since_rate_limit < 20:
-            return INTER_WAVE_BASE_DELAY + RATE_LIMIT_EXTRA_DELAY
-        return INTER_WAVE_BASE_DELAY
-
-    async def _execute_agent_staggered(
-        self,
-        session_id: str,
-        agent_id: str,
-        scenario: str,
-        context: str | None,
-        delay: float = 0.0,
-    ) -> AgentExecutionResult:
-        """Execute agent with an initial stagger delay to prevent burst."""
-        if delay > 0:
-            await asyncio.sleep(delay)
-        return await self._execute_agent(session_id, agent_id, scenario, context)
-
-    async def _execute_agent(
-        self,
-        session_id: str,
-        agent_id: str,
-        scenario: str,
-        context: str | None,
-    ) -> AgentExecutionResult:
-        """Execute a single agent and update Board Context.
-
-        Handles errors gracefully — a failed agent does not break
-        the entire orchestration. Includes per-agent timeout protection.
-        """
-        # Mark agent as started in Board Context
-        await self._board_context.mark_agent_started(session_id, agent_id)
-
-        start = time.perf_counter()
-
-        try:
-            service, request_cls = self._agents[agent_id]
-
-            # Build agent-specific request
-            request_kwargs: dict[str, Any] = {"scenario": scenario}
-            if context:
-                request_kwargs["context"] = context
-
-            agent_request = request_cls(**request_kwargs)
-
-            # Execute the agent with timeout protection
-            response = await asyncio.wait_for(
-                service.analyze(agent_request),
-                timeout=AGENT_TIMEOUT_SECONDS,
-            )
-            response_dict = response.model_dump()
-
-            elapsed_ms = int((time.perf_counter() - start) * 1000)
-
-            # Update Board Context with success
-            await self._board_context.update_agent_response(
-                session_id=session_id,
-                agent_id=agent_id,
-                response=response_dict,
-                execution_time_ms=elapsed_ms,
-                status="completed",
-            )
-
-            return AgentExecutionResult(
-                agent_id=agent_id,
-                response=response_dict,
-                execution_time_ms=elapsed_ms,
-                status="completed",
-                error=None,
-            )
-
-        except asyncio.TimeoutError:
-            elapsed_ms = int((time.perf_counter() - start) * 1000)
-            error_msg = f"Agent '{agent_id}' timed out after {AGENT_TIMEOUT_SECONDS}s"
-            logger.error(error_msg)
-
-            await self._board_context.update_agent_response(
-                session_id=session_id,
-                agent_id=agent_id,
-                response=None,
-                execution_time_ms=elapsed_ms,
-                status="timeout",
-                error=error_msg,
-            )
-
-            return AgentExecutionResult(
-                agent_id=agent_id,
-                response=None,
-                execution_time_ms=elapsed_ms,
-                status="timeout",
-                error=error_msg,
-            )
-
-        except Exception as e:
-            elapsed_ms = int((time.perf_counter() - start) * 1000)
-            error_msg = str(e)
-            logger.error(f"Agent '{agent_id}' failed: {error_msg}")
-
-            # Track rate limits for inter-wave delay calculation
-            if "429" in error_msg:
-                self._last_rate_limit_time = time.perf_counter()
-
-            # Update Board Context with failure
-            await self._board_context.update_agent_response(
-                session_id=session_id,
-                agent_id=agent_id,
-                response=None,
-                execution_time_ms=elapsed_ms,
-                status="failed",
-                error=error_msg,
-            )
-
-            return AgentExecutionResult(
-                agent_id=agent_id,
-                response=None,
-                execution_time_ms=elapsed_ms,
-                status="failed",
-                error=error_msg,
-            )

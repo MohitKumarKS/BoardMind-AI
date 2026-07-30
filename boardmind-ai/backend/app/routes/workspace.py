@@ -159,3 +159,80 @@ async def analyze_analytics(request: AnalyticsAgentRequest) -> AnalyticsAgentRes
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+# --- Generic dynamic endpoint for ALL 20 agents ---
+
+from pydantic import BaseModel, Field
+from typing import Optional, Any
+
+from app.agents.ceo import CEOAgentService, CEOAgentRequest
+from app.agents.ciso import CISOAgentService, CISOAgentRequest
+from app.agents.risk import RiskAgentService, RiskAgentRequest
+from app.agents.compliance import ComplianceAgentService, ComplianceAgentRequest
+from app.agents.strategy import StrategyAgentService, StrategyAgentRequest
+from app.agents.product import ProductAgentService, ProductAgentRequest
+from app.agents.customer_success import CustomerSuccessAgentService, CustomerSuccessAgentRequest
+from app.agents.supply_chain import SupplyChainAgentService, SupplyChainAgentRequest
+from app.agents.esg import ESGAgentService, ESGAgentRequest
+from app.agents.ai_governance import AIGovernanceAgentService, AIGovernanceAgentRequest
+from app.agents.innovation import InnovationAgentService, InnovationAgentRequest
+from app.agents.investor_relations import InvestorRelationsAgentService, InvestorRelationsAgentRequest
+
+# Registry mapping agent_id to (service, request_class) for all 20 agents
+AGENT_REGISTRY: dict = {
+    "finance": (finance_service, FinanceAgentRequest),
+    "marketing": (marketing_service, MarketingAgentRequest),
+    "sales": (sales_service, SalesAgentRequest),
+    "hr": (hr_service, HRAgentRequest),
+    "operations": (operations_service, OperationsAgentRequest),
+    "legal": (legal_service, LegalAgentRequest),
+    "it": (it_service, ITAgentRequest),
+    "business_analytics": (analytics_service, AnalyticsAgentRequest),
+    "ceo": (CEOAgentService(), CEOAgentRequest),
+    "ciso": (CISOAgentService(), CISOAgentRequest),
+    "risk": (RiskAgentService(), RiskAgentRequest),
+    "compliance": (ComplianceAgentService(), ComplianceAgentRequest),
+    "strategy": (StrategyAgentService(), StrategyAgentRequest),
+    "product": (ProductAgentService(), ProductAgentRequest),
+    "customer_success": (CustomerSuccessAgentService(), CustomerSuccessAgentRequest),
+    "supply_chain": (SupplyChainAgentService(), SupplyChainAgentRequest),
+    "esg": (ESGAgentService(), ESGAgentRequest),
+    "ai_governance": (AIGovernanceAgentService(), AIGovernanceAgentRequest),
+    "innovation": (InnovationAgentService(), InnovationAgentRequest),
+    "investor_relations": (InvestorRelationsAgentService(), InvestorRelationsAgentRequest),
+}
+
+
+class GenericAgentRequest(BaseModel):
+    """Generic request for any agent via the dynamic endpoint."""
+    scenario: str = Field(..., min_length=20, description="Business proposal to analyze")
+    context: Optional[str] = Field(default=None, description="Additional context")
+
+
+@router.post("/analyze/{agent_id}")
+async def analyze_generic(agent_id: str, request: GenericAgentRequest) -> dict[str, Any]:
+    """Generic endpoint to invoke any registered agent by ID.
+
+    Supports all 20 agents without requiring individual routes.
+    """
+    if agent_id not in AGENT_REGISTRY:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Agent '{agent_id}' not found. Available: {sorted(AGENT_REGISTRY.keys())}",
+        )
+
+    service, request_cls = AGENT_REGISTRY[agent_id]
+
+    try:
+        agent_request = request_cls(scenario=request.scenario, context=request.context)
+        response = await service.analyze(agent_request)
+        response_dict = response.model_dump()
+        await _persist_workspace_analysis(agent_id, request.scenario, response_dict)
+        return response_dict
+    except LLMError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Agent '{agent_id}' error: {str(e)}")

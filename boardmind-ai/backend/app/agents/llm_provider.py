@@ -59,11 +59,11 @@ class BaseLLMProvider(ABC):
 
 
 class GroqProvider(BaseLLMProvider):
-    """Groq LLM provider using the official Groq Python SDK.
+    """Groq LLM provider with dual-key failover.
 
-    Uses Llama 3.3 70B as the primary model with automatic fallback
-    to Llama 3.1 8B if the primary model is unavailable.
-    Configured via GROQ_API_KEY environment variable.
+    Uses two Groq API keys (from different accounts) to double TPM capacity.
+    When primary key hits rate limit, automatically switches to secondary.
+    Configured via GROQ_API_KEY and GROQ_API_KEY_SECONDARY environment variables.
     """
 
     PRIMARY_MODEL = "llama-3.1-8b-instant"
@@ -71,9 +71,10 @@ class GroqProvider(BaseLLMProvider):
 
     def __init__(self):
         self._model: str = os.environ.get("GROQ_MODEL", self.PRIMARY_MODEL)
-        self._client = None
+        self._primary_client = None
+        self._secondary_client = None
         self._semaphore = asyncio.Semaphore(
-            int(os.environ.get("LLM_MAX_CONCURRENT", "2"))
+            int(os.environ.get("LLM_MAX_CONCURRENT", "3"))
         )
 
     @property
@@ -81,42 +82,64 @@ class GroqProvider(BaseLLMProvider):
         api_key = os.environ.get("GROQ_API_KEY")
         return api_key is not None and len(api_key) > 0
 
-    def _get_client(self):
-        """Lazy-initialize the Groq client."""
-        if self._client is None:
+    @property
+    def _has_secondary(self) -> bool:
+        key = os.environ.get("GROQ_API_KEY_SECONDARY")
+        return key is not None and len(key) > 0
+
+    def _get_primary_client(self):
+        """Lazy-initialize the primary Groq client."""
+        if self._primary_client is None:
             from groq import Groq
-            self._client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-        return self._client
+            self._primary_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
+        return self._primary_client
+
+    def _get_secondary_client(self):
+        """Lazy-initialize the secondary Groq client."""
+        if self._secondary_client is None:
+            from groq import Groq
+            self._secondary_client = Groq(api_key=os.environ.get("GROQ_API_KEY_SECONDARY"))
+        return self._secondary_client
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
-        """Generate a JSON response from Groq/Llama."""
+        """Generate a JSON response from Groq with dual-key failover."""
         if not self.is_configured:
             raise LLMNotConfiguredError(
                 "No Groq API key configured. Set GROQ_API_KEY environment variable."
             )
 
-        client = self._get_client()
-
         async with self._semaphore:
-            # Try primary model first
+            # Try primary key
             try:
+                client = self._get_primary_client()
                 return await self._call_groq(client, self._model, system_prompt, user_prompt)
             except LLMError as e:
                 error_msg = str(e)
-                # If model not available, try fallback
+
+                # Rate limited on primary → try secondary key
+                if ("429" in error_msg or "rate_limit" in error_msg.lower()) and self._has_secondary:
+                    logger.info("Primary key rate limited, switching to secondary key")
+                    try:
+                        client2 = self._get_secondary_client()
+                        return await self._call_groq(client2, self._model, system_prompt, user_prompt)
+                    except LLMError as e2:
+                        # Secondary also failed — propagate for retry logic
+                        raise LLMError(f"Both keys exhausted: primary={error_msg[:50]}, secondary={str(e2)[:50]}")
+
+                # Model error → try fallback model on primary
                 if "model" in error_msg.lower() and self._model != self.FALLBACK_MODEL:
-                    logger.warning(
-                        f"Primary model '{self._model}' failed, "
-                        f"falling back to '{self.FALLBACK_MODEL}'"
-                    )
-                    return await self._call_groq(
-                        client, self.FALLBACK_MODEL, system_prompt, user_prompt
-                    )
+                    logger.warning(f"Primary model failed, trying fallback model")
+                    try:
+                        client = self._get_primary_client()
+                        return await self._call_groq(client, self.FALLBACK_MODEL, system_prompt, user_prompt)
+                    except LLMError:
+                        pass  # Fall through to raise original
+
                 raise
 
     async def _call_groq(
         self, client, model: str, system_prompt: str, user_prompt: str,
-        max_tokens: int = 3072,
+        max_tokens: int = 1024,
     ) -> str:
         """Execute a single Groq API call."""
         try:
@@ -141,34 +164,7 @@ class GroqProvider(BaseLLMProvider):
         except LLMError:
             raise
         except Exception as e:
-            error_msg = str(e)
-
-            # Retry once on rate limit errors
-            if "429" in error_msg or "rate_limit" in error_msg.lower():
-                logger.warning(f"Groq rate limited, retrying in 8s...")
-                await asyncio.sleep(8)
-                try:
-                    response = await asyncio.to_thread(
-                        client.chat.completions.create,
-                        model=model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        temperature=0.3,
-                        max_tokens=max_tokens,
-                        response_format={"type": "json_object"},
-                    )
-                    content = response.choices[0].message.content
-                    if content:
-                        return content
-                    raise LLMError("Groq returned empty on retry")
-                except LLMError:
-                    raise
-                except Exception as retry_e:
-                    raise LLMError(f"Groq retry failed: {retry_e}")
-
-            raise LLMError(f"Groq invocation failed: {error_msg}")
+            raise LLMError(f"Groq API error: {str(e)}")
 
 
 class OpenAIProvider(BaseLLMProvider):
