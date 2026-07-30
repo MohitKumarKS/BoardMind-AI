@@ -29,6 +29,9 @@ node_modules/
 *.swo
 .kiro/
 
+# Specs (development artifacts)
+.specs/
+
 # OS
 .DS_Store
 Thumbs.db
