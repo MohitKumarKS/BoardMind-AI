@@ -17,6 +17,10 @@ class OrchestratorRequest(BaseModel):
             "targeting mid-market companies at $2,000/month."
         ],
     )
+    include_all_agents: bool = Field(
+        default=True,
+        description="When True, all 20 agents participate regardless of routing. Set False for selective routing.",
+    )
     optional_context: Optional[str] = Field(
         default=None,
         description="Additional context or constraints for all agents",

@@ -69,6 +69,8 @@ class DecisionRouterService:
         If the scenario mentions topics relevant to departments not already
         selected, those departments are added. This ensures complex,
         multi-domain scenarios get comprehensive coverage.
+
+        Updated to support all 20 executive agents.
         """
         scenario_lower = scenario.lower()
         agents = list(base_agents)
@@ -112,6 +114,66 @@ class DecisionRouterService:
                 "analytics", "data", "metrics", "kpi", "forecasting",
                 "measurement", "dashboard", "reporting", "insights",
                 "benchmark", "performance tracking",
+            ],
+            "ceo": [
+                "strategic direction", "corporate vision", "board",
+                "stakeholder", "enterprise-wide", "transformation",
+                "company strategy", "leadership", "executive",
+            ],
+            "ciso": [
+                "cybersecurity", "data breach", "threat", "vulnerability",
+                "soc2", "iso27001", "nist", "encryption", "access control",
+                "penetration testing", "zero trust", "ransomware",
+            ],
+            "risk": [
+                "risk management", "risk appetite", "risk exposure",
+                "scenario analysis", "monte carlo", "risk register",
+                "mitigation", "business continuity", "downside",
+            ],
+            "compliance": [
+                "regulatory", "gdpr", "hipaa", "sox", "pci-dss",
+                "audit", "governance framework", "compliance gap",
+                "regulatory filing", "anti-money laundering",
+            ],
+            "strategy": [
+                "competitive advantage", "market positioning", "moat",
+                "tam", "strategic plan", "first mover", "disruption",
+                "market entry", "diversification", "portfolio",
+            ],
+            "product": [
+                "product roadmap", "product-market fit", "feature",
+                "user experience", "mvp", "product launch", "backlog",
+                "user research", "adoption", "product metrics",
+            ],
+            "customer_success": [
+                "customer retention", "nps", "csat", "churn rate",
+                "customer health", "onboarding", "renewal", "upsell",
+                "customer satisfaction", "customer lifetime value",
+            ],
+            "supply_chain": [
+                "supply chain", "procurement", "vendor management",
+                "logistics", "inventory", "warehouse", "fulfillment",
+                "sourcing", "lead time", "supplier",
+            ],
+            "esg": [
+                "sustainability", "carbon footprint", "esg",
+                "climate", "emissions", "diversity", "social impact",
+                "green", "environmental", "net zero",
+            ],
+            "ai_governance": [
+                "ai ethics", "algorithmic bias", "fairness",
+                "explainability", "responsible ai", "model governance",
+                "eu ai act", "ai risk", "automated decision",
+            ],
+            "innovation": [
+                "r&d", "research", "innovation", "patent",
+                "emerging technology", "prototype", "proof of concept",
+                "breakthrough", "technology readiness", "invention",
+            ],
+            "investor_relations": [
+                "investor", "shareholder", "earnings", "eps",
+                "guidance", "analyst", "market cap", "dividend",
+                "ipo", "sec filing", "valuation", "stock",
             ],
         }
 

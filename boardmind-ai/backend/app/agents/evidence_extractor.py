@@ -153,6 +153,95 @@ def build_evidence_rationale_prefix(facts: dict[str, Any], department: str) -> s
         if facts.get("top_performer"):
             parts.append(f"({facts['top_performer']} leads)")
 
+    # --- New 12 agents: generic evidence prefix based on available data ---
+    elif department == "ceo":
+        if facts.get("total_revenue"):
+            parts.append(f"The uploaded data indicates a ${facts['total_revenue']} revenue operation")
+        if facts.get("data_rows"):
+            parts.append(f"spanning {facts['data_rows']} data points for strategic consideration")
+        if facts.get("max_growth"):
+            parts.append(f"with growth potential up to {facts['max_growth']}")
+
+    elif department == "ciso":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data involves {facts['data_rows']} records requiring security assessment")
+        if facts.get("total_revenue"):
+            parts.append(f"protecting a ${facts['total_revenue']} revenue stream from cyber threats")
+
+    elif department == "risk":
+        if facts.get("total_revenue"):
+            parts.append(f"The uploaded data shows ${facts['total_revenue']} total value at risk")
+        if facts.get("max_growth") and facts.get("min_growth"):
+            parts.append(f"with variance from {facts['min_growth']} to {facts['max_growth']} indicating exposure range")
+        if facts.get("data_rows"):
+            parts.append(f"across {facts['data_rows']} risk factors")
+
+    elif department == "compliance":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data spans {facts['data_rows']} items requiring compliance review")
+        if facts.get("filename"):
+            parts.append(f"sourced from '{facts['filename']}'")
+
+    elif department == "strategy":
+        if facts.get("total_revenue"):
+            parts.append(f"The uploaded data projects ${facts['total_revenue']} in addressable opportunity")
+        if facts.get("top_performer"):
+            parts.append(f"with {facts['top_performer']} as the leading segment")
+        if facts.get("max_growth"):
+            parts.append(f"and growth ceiling at {facts['max_growth']}")
+
+    elif department == "product":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data covers {facts['data_rows']} product data points")
+        if facts.get("top_performer"):
+            parts.append(f"with highest demand in {facts['top_performer']}")
+        if facts.get("max_growth"):
+            parts.append(f"showing {facts['max_growth']} peak adoption growth")
+
+    elif department == "customer_success":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data tracks {facts['data_rows']} customer data points")
+        if facts.get("top_performer"):
+            parts.append(f"with strongest performance in {facts['top_performer']}")
+        if facts.get("average_metric"):
+            parts.append(f"and average metrics at {facts['average_metric']}")
+
+    elif department == "supply_chain":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data covers {facts['data_rows']} supply chain nodes")
+        if facts.get("top_performer"):
+            parts.append(f"with highest throughput in {facts['top_performer']}")
+        if facts.get("total_revenue"):
+            parts.append(f"supporting ${facts['total_revenue']} in operations value")
+
+    elif department == "esg":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data includes {facts['data_rows']} sustainability data points")
+        if facts.get("max_growth"):
+            parts.append(f"with metrics ranging up to {facts['max_growth']}")
+
+    elif department == "ai_governance":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data encompasses {facts['data_rows']} records for AI governance review")
+        if facts.get("filename"):
+            parts.append(f"from source '{facts['filename']}'")
+
+    elif department == "innovation":
+        if facts.get("data_rows"):
+            parts.append(f"The uploaded data reveals {facts['data_rows']} innovation-relevant data points")
+        if facts.get("max_growth"):
+            parts.append(f"with growth potential reaching {facts['max_growth']}")
+        if facts.get("top_performer"):
+            parts.append(f"led by {facts['top_performer']}")
+
+    elif department == "investor_relations":
+        if facts.get("total_revenue"):
+            parts.append(f"The uploaded data shows ${facts['total_revenue']} in total value for investor communications")
+        if facts.get("max_growth"):
+            parts.append(f"with growth trajectory up to {facts['max_growth']}")
+        if facts.get("top_performer"):
+            parts.append(f"driven primarily by {facts['top_performer']}")
+
     if not parts:
         return ""
 

@@ -21,6 +21,7 @@ class BoardContextService:
     """Manages in-memory board session state.
 
     Thread-safe via asyncio.Lock for concurrent agent updates.
+    Sessions are automatically evicted when exceeding MAX_SESSIONS.
 
     Usage:
         ctx = BoardContextService()
@@ -28,6 +29,8 @@ class BoardContextService:
         ctx.update_agent_response(session_id, agent_id, response)
         context = ctx.get_context(session_id)
     """
+
+    MAX_SESSIONS = 200  # Evict oldest when exceeded
 
     def __init__(self):
         self._sessions: dict[str, BoardContext] = {}
@@ -69,8 +72,23 @@ class BoardContextService:
         )
 
         self._sessions[session_id] = context
+        self._evict_old_sessions()
         logger.info(f"Board Context created: session={session_id}, agents={selected_agents}")
         return context
+
+    def _evict_old_sessions(self) -> None:
+        """Remove oldest sessions when exceeding MAX_SESSIONS."""
+        if len(self._sessions) <= self.MAX_SESSIONS:
+            return
+        # Sort by created_at and remove oldest
+        sorted_sessions = sorted(
+            self._sessions.items(),
+            key=lambda item: item[1].created_at,
+        )
+        to_remove = len(self._sessions) - self.MAX_SESSIONS
+        for session_id, _ in sorted_sessions[:to_remove]:
+            del self._sessions[session_id]
+            logger.debug(f"Evicted old session: {session_id}")
 
     def get_session(self, session_id: str) -> Optional[BoardContext]:
         """Retrieve a board session by ID. Returns None if not found."""

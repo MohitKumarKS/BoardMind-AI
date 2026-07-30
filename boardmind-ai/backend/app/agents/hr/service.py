@@ -23,8 +23,16 @@ class HRAgentService:
             return self._generate_mock_response(request)
 
         user_prompt = build_hr_prompt(request.scenario, request.context)
-        raw_response = await self.llm.generate(HR_SYSTEM_PROMPT, user_prompt)
-        return self._parse_and_validate(raw_response)
+
+        from app.agents.retry import retry_llm_call
+        return await retry_llm_call(
+            agent_id="hr",
+            llm_generate=self.llm.generate,
+            system_prompt=HR_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            parse_fn=self._parse_and_validate,
+            fallback_fn=lambda: self._generate_mock_response(request),
+        )
 
     def _parse_and_validate(self, raw_response: str) -> HRAgentResponse:
         cleaned = raw_response.strip()
@@ -37,6 +45,10 @@ class HRAgentService:
         data["agent_id"] = "hr"
         data["round"] = 1
         data["references_to"] = []
+
+        from app.agents.response_normalizer import normalize_agent_response
+        data = normalize_agent_response(data)
+
         return HRAgentResponse.model_validate(data)
 
     def _generate_mock_response(self, request: HRAgentRequest) -> HRAgentResponse:

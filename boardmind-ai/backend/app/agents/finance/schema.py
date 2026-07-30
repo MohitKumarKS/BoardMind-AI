@@ -56,7 +56,7 @@ class FinanceDomainAssessment(BaseModel):
         examples=["14-18 months at projected adoption rates"],
     )
     risk_level: RiskLevel = Field(
-        ...,
+        default=RiskLevel.MEDIUM,
         description="Overall financial risk classification",
     )
 

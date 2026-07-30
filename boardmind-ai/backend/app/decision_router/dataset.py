@@ -173,4 +173,52 @@ TRAINING_DATA: list[tuple[str, str]] = [
     ("We need to decide our response to a major market disruption", "general_strategic_decision"),
     ("Evaluating a fundamental change to our go-to-market model", "general_strategic_decision"),
     ("The board wants to discuss our long-term competitive positioning", "general_strategic_decision"),
+
+    # --- cybersecurity ---
+    ("We discovered a critical vulnerability in our authentication system that needs immediate remediation", "cybersecurity"),
+    ("Planning to implement zero trust architecture across all corporate systems", "cybersecurity"),
+    ("Should we invest in a Security Operations Center and 24/7 monitoring", "cybersecurity"),
+    ("Our penetration test revealed several high-severity findings in production", "cybersecurity"),
+    ("Evaluating whether to implement multi-factor authentication company-wide", "cybersecurity"),
+    ("We need to respond to a ransomware threat targeting our industry", "cybersecurity"),
+    ("Planning cybersecurity training and phishing simulation for all employees", "cybersecurity"),
+    ("Should we hire a red team to continuously test our defenses", "cybersecurity"),
+    ("We need to encrypt all data at rest and in transit for compliance", "cybersecurity"),
+    ("Evaluating endpoint detection and response solutions for remote workforce", "cybersecurity"),
+
+    # --- sustainability ---
+    ("We want to achieve carbon neutrality by 2030 and need a roadmap", "sustainability"),
+    ("Planning to publish our first ESG report for stakeholders", "sustainability"),
+    ("Should we switch to 100% renewable energy for our data centers", "sustainability"),
+    ("Evaluating our supply chain for environmental and social compliance", "sustainability"),
+    ("We need to reduce our carbon footprint by 50% over the next 5 years", "sustainability"),
+    ("Planning to implement a diversity equity and inclusion program", "sustainability"),
+    ("Should we pursue B Corp certification for our company", "sustainability"),
+    ("We want to eliminate single-use plastics from our operations", "sustainability"),
+    ("Evaluating sustainable packaging alternatives for our product line", "sustainability"),
+    ("The board wants an ESG governance framework for quarterly reporting", "sustainability"),
+
+    # --- innovation ---
+    ("We want to establish an internal R&D lab for emerging technology exploration", "innovation"),
+    ("Planning to file patents for our novel machine learning algorithms", "innovation"),
+    ("Should we invest in quantum computing research for future advantage", "innovation"),
+    ("Evaluating a corporate venture capital arm to invest in startups", "innovation"),
+    ("We need to assess technology readiness of blockchain for our supply chain", "innovation"),
+    ("Planning a hackathon and innovation sprint program for employees", "innovation"),
+    ("Should we partner with universities for joint research programs", "innovation"),
+    ("We want to build a proof of concept for augmented reality customer experiences", "innovation"),
+    ("Evaluating whether to open-source our internal frameworks for community growth", "innovation"),
+    ("Planning to create an innovation lab focused on generative AI applications", "innovation"),
+
+    # --- investor_communications ---
+    ("We need to prepare messaging for analysts about our revenue miss this quarter", "investor_communications"),
+    ("Planning our investor day presentation and strategic narrative", "investor_communications"),
+    ("Should we update our earnings guidance given market conditions", "investor_communications"),
+    ("Evaluating a share buyback program to return value to shareholders", "investor_communications"),
+    ("We need to communicate a major acquisition to the investor community", "investor_communications"),
+    ("Planning to issue a special dividend following strong annual results", "investor_communications"),
+    ("Should we pursue an IPO or remain private for another 2 years", "investor_communications"),
+    ("We need to address analyst concerns about our declining market share", "investor_communications"),
+    ("Evaluating our capital allocation strategy for the next fiscal year", "investor_communications"),
+    ("Planning to restructure our reporting segments for better transparency", "investor_communications"),
 ]

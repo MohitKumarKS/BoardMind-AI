@@ -39,7 +39,7 @@ def format_prompt_with_evidence(
     scenario: str,
     context: str | None,
     role_instruction: str,
-    max_evidence_chars: int = 1500,
+    max_evidence_chars: int = 800,
 ) -> str:
     """Build a complete user prompt with separated evidence section.
 
@@ -60,9 +60,9 @@ def format_prompt_with_evidence(
     """
     user_context, evidence = build_evidence_section(context)
 
-    # Truncate scenario if extremely long
-    if len(scenario) > 1500:
-        scenario = scenario[:1500] + "..."
+    # Truncate scenario to reduce token usage
+    if len(scenario) > 600:
+        scenario = scenario[:600] + "..."
 
     prompt = f"""Analyze the following business proposal.
 
@@ -71,8 +71,8 @@ def format_prompt_with_evidence(
 {scenario}"""
 
     if user_context:
-        # Truncate user context to prevent prompt overflow
-        truncated_context = user_context[:800] if len(user_context) > 800 else user_context
+        # Truncate user context to minimize tokens
+        truncated_context = user_context[:300] if len(user_context) > 300 else user_context
         prompt += f"""
 
 ## Additional Context

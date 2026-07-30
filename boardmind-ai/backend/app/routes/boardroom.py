@@ -78,8 +78,10 @@ async def run_consensus(request: ConsensusRequest) -> ConsensusResult:
         # Persist to MCP Knowledge Hub (non-blocking, fails gracefully)
         try:
             from app.mcp_hub.integration import persist_meeting_results
+            from app.mcp_hub.storage_service import StorageService
+            from app.reports import ReportGeneratorService
+            import base64
 
-            # Get the board context for this session
             ctx = orchestrator.board_context.get_context(request.session_id)
             if ctx:
                 agent_responses = [
@@ -99,8 +101,25 @@ async def run_consensus(request: ConsensusRequest) -> ConsensusResult:
                     consensus_result=result.model_dump(),
                     optional_context=ctx.optional_context,
                 )
-        except Exception:
-            pass  # Non-fatal — hub persistence is optional
+
+                # Generate and store report PDF immediately
+                try:
+                    rep_svc = ReportGeneratorService(orchestrator.board_context)
+                    report = rep_svc.generate(request.session_id)
+                    pdf_bytes = rep_svc.generate_pdf(request.session_id)
+                    pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+                    storage = StorageService()
+                    await storage.store_report(
+                        request.session_id,
+                        report.model_dump(mode="json"),
+                        pdf_b64,
+                    )
+                except Exception:
+                    pass  # Report storage is optional
+
+        except Exception as hub_err:
+            import logging
+            logging.getLogger(__name__).warning(f"MCP Hub persistence failed (non-fatal): {hub_err}")
 
         return result
     except ValueError as e:

@@ -23,8 +23,16 @@ class LegalAgentService:
             return self._generate_mock_response(request)
 
         user_prompt = build_legal_prompt(request.scenario, request.context)
-        raw_response = await self.llm.generate(LEGAL_SYSTEM_PROMPT, user_prompt)
-        return self._parse_and_validate(raw_response)
+
+        from app.agents.retry import retry_llm_call
+        return await retry_llm_call(
+            agent_id="legal",
+            llm_generate=self.llm.generate,
+            system_prompt=LEGAL_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            parse_fn=self._parse_and_validate,
+            fallback_fn=lambda: self._generate_mock_response(request),
+        )
 
     def _parse_and_validate(self, raw_response: str) -> LegalAgentResponse:
         cleaned = raw_response.strip()
@@ -70,6 +78,9 @@ class LegalAgentService:
                 da["risk_level"] = "low"
             else:
                 da["risk_level"] = "medium"
+
+        from app.agents.response_normalizer import normalize_agent_response
+        data = normalize_agent_response(data)
 
         return LegalAgentResponse.model_validate(data)
 

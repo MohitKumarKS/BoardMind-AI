@@ -30,6 +30,8 @@ class Meeting(Base):
     proposal = Column(Text, nullable=False)
     business_category = Column(String(100), nullable=True)
     optional_context = Column(Text, nullable=True)
+    report_json = Column(JSON, nullable=True)  # Full report content
+    report_pdf = Column(Text, nullable=True)  # Base64-encoded PDF
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     analyses = relationship("ExecutiveAnalysis", back_populates="meeting", cascade="all, delete-orphan")
