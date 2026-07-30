@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 NUM_WORKERS = int(os.environ.get("WORKER_POOL_SIZE", "5"))
-WORKER_TIMEOUT = float(os.environ.get("WORKER_TIMEOUT", "120.0"))
+WORKER_TIMEOUT = float(os.environ.get("WORKER_TIMEOUT", "180.0"))
 STAGGER_INTERVAL = float(os.environ.get("WORKER_STAGGER", "0.8"))
 MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
 BASE_BACKOFF = 2.0
@@ -180,7 +180,7 @@ class WorkerPool:
                 break
 
             remaining = WORKER_TIMEOUT - elapsed_so_far
-            attempt_timeout = min(remaining, 35.0)
+            attempt_timeout = min(remaining, 60.0)
 
             try:
                 response = await asyncio.wait_for(
