@@ -74,7 +74,7 @@ class GroqProvider(BaseLLMProvider):
         self._primary_client = None
         self._secondary_client = None
         self._semaphore = asyncio.Semaphore(
-            int(os.environ.get("LLM_MAX_CONCURRENT", "3"))
+            int(os.environ.get("LLM_MAX_CONCURRENT", "4"))
         )
 
     @property
@@ -141,7 +141,20 @@ class GroqProvider(BaseLLMProvider):
         self, client, model: str, system_prompt: str, user_prompt: str,
         max_tokens: int = 1024,
     ) -> str:
-        """Execute a single Groq API call."""
+        """Execute a single Groq API call with prompt optimization."""
+        # Compress prompts: remove excessive whitespace and redundant formatting
+        system_prompt = self._compress_prompt(system_prompt)
+        user_prompt = self._compress_prompt(user_prompt)
+
+        # Adaptive max_tokens: shorter prompts get smaller output budgets
+        prompt_chars = len(system_prompt) + len(user_prompt)
+        if prompt_chars < 1500:
+            max_tokens = 768  # Short prompts = concise responses
+        elif prompt_chars < 3000:
+            max_tokens = 1024
+        else:
+            max_tokens = 1280  # Only large prompts get more output space
+
         try:
             response = await asyncio.to_thread(
                 client.chat.completions.create,
@@ -165,6 +178,18 @@ class GroqProvider(BaseLLMProvider):
             raise
         except Exception as e:
             raise LLMError(f"Groq API error: {str(e)}")
+
+    @staticmethod
+    def _compress_prompt(text: str) -> str:
+        """Compress a prompt by removing unnecessary whitespace and formatting."""
+        import re
+        # Collapse multiple blank lines to single
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        # Remove trailing spaces on lines
+        text = re.sub(r' +\n', '\n', text)
+        # Collapse multiple spaces (keep single)
+        text = re.sub(r'  +', ' ', text)
+        return text.strip()
 
 
 class OpenAIProvider(BaseLLMProvider):

@@ -103,24 +103,37 @@ class WorkerPool:
             task.enqueued_at = time.time()
             await self._queue.put((task.priority, task))
 
-        logger.info(f"WorkerPool: {len(tasks)} tasks queued, starting {NUM_WORKERS} workers")
+        # Determine effective worker count (no more workers than tasks)
+        effective_workers = min(NUM_WORKERS, len(tasks))
+        logger.info(f"WorkerPool: {len(tasks)} tasks queued, {effective_workers} workers starting")
 
         # Start workers with stagger
         workers = []
-        for i in range(NUM_WORKERS):
+        for i in range(effective_workers):
             worker = asyncio.create_task(
                 self._worker(i, board_context_updater)
             )
             workers.append(worker)
-            if i < NUM_WORKERS - 1:
+            if i < effective_workers - 1:
                 await asyncio.sleep(STAGGER_INTERVAL)
 
         # Wait for all workers to finish (they stop when queue is empty)
         await asyncio.gather(*workers)
 
-        logger.info(
-            f"WorkerPool: Complete — {len(self._results)}/{self._total_enqueued} results"
-        )
+        # Performance summary
+        completed = [r for r in self._results if r.status == "completed"]
+        failed = [r for r in self._results if r.status != "completed"]
+        if completed:
+            times = [r.execution_time_ms for r in completed]
+            logger.info(
+                f"WorkerPool: {len(completed)}/{self._total_enqueued} succeeded | "
+                f"avg={sum(times)//len(times)}ms | "
+                f"fastest={min(times)}ms | slowest={max(times)}ms | "
+                f"retries={sum(r.retry_count for r in self._results)}"
+            )
+        if failed:
+            logger.warning(f"WorkerPool: Failed: {[r.agent_id for r in failed]}")
+
         return self._results
 
     async def _worker(self, worker_id: int, board_context_updater):
