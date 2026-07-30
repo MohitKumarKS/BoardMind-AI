@@ -166,22 +166,27 @@ class WorkerPool:
             self._queue.task_done()
 
     async def _execute_task(self, worker_id: int, task: ExecutiveTask) -> ExecutiveResult:
-        """Execute a single task with retry logic."""
+        """Execute a single task with time-budgeted retry logic."""
         queue_wait = int((time.time() - task.enqueued_at) * 1000)
         start = time.time()
         last_error = ""
         retry_count = 0
 
         for attempt in range(1, MAX_RETRIES + 1):
-            llm_start = time.time()
+            # Check time budget
+            elapsed_so_far = time.time() - start
+            if elapsed_so_far > WORKER_TIMEOUT - 5:
+                last_error = f"Time budget exhausted ({elapsed_so_far:.0f}s)"
+                break
+
+            remaining = WORKER_TIMEOUT - elapsed_so_far
+            attempt_timeout = min(remaining, 35.0)
 
             try:
-                # Execute the agent with timeout
                 response = await asyncio.wait_for(
                     task.service.analyze(task.request),
-                    timeout=WORKER_TIMEOUT,
+                    timeout=attempt_timeout,
                 )
-                latency = (time.time() - llm_start) * 1000
                 elapsed = int((time.time() - start) * 1000)
 
                 logger.info(
@@ -200,7 +205,7 @@ class WorkerPool:
                 )
 
             except asyncio.TimeoutError:
-                last_error = f"Timeout after {WORKER_TIMEOUT}s"
+                last_error = f"Timeout ({attempt_timeout:.0f}s)"
                 retry_count += 1
                 logger.warning(f"Worker {worker_id}: {task.agent_id} timed out (attempt {attempt})")
 
@@ -208,29 +213,27 @@ class WorkerPool:
                 error_msg = str(e)
                 retry_count += 1
 
-                # Rate limit — backoff and retry
                 if "429" in error_msg or "rate_limit" in error_msg.lower():
-                    cooldown = 10.0
+                    remaining_budget = WORKER_TIMEOUT - (time.time() - start) - 5
+                    if remaining_budget <= 2:
+                        last_error = "Rate limited, no time remaining"
+                        break
+                    cooldown = min(10.0, remaining_budget)
                     match = re.search(r'try again in ([\d.]+)s', error_msg)
                     if match:
-                        cooldown = float(match.group(1)) + 1.0
-                    last_error = f"Rate limited"
-                    logger.info(f"Worker {worker_id}: {task.agent_id} rate limited, waiting {cooldown:.0f}s")
+                        cooldown = min(float(match.group(1)) + 0.5, cooldown)
+                    last_error = "Rate limited"
+                    logger.info(f"Worker {worker_id}: {task.agent_id} rate limited, wait {cooldown:.0f}s")
                     await asyncio.sleep(cooldown)
                     continue
 
-                # Other errors
                 last_error = error_msg[:200]
-                logger.warning(f"Worker {worker_id}: {task.agent_id} error (attempt {attempt}): {error_msg[:80]}")
-
-                # Exponential backoff for retries
+                logger.warning(f"Worker {worker_id}: {task.agent_id} error: {error_msg[:80]}")
                 if attempt < MAX_RETRIES:
-                    backoff = min(BASE_BACKOFF * (2 ** (attempt - 1)), MAX_BACKOFF)
-                    await asyncio.sleep(backoff)
+                    await asyncio.sleep(min(BASE_BACKOFF * attempt, MAX_BACKOFF))
 
-        # All retries exhausted
         elapsed = int((time.time() - start) * 1000)
-        logger.error(f"Worker {worker_id}: {task.agent_id} FAILED after {MAX_RETRIES} attempts: {last_error}")
+        logger.error(f"Worker {worker_id}: {task.agent_id} FAILED ({retry_count} retries): {last_error}")
 
         return ExecutiveResult(
             agent_id=task.agent_id,
