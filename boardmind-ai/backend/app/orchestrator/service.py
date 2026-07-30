@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 WAVE_SIZE = 4
 INTER_WAVE_BASE_DELAY = 5.0  # seconds between waves (minimum cooldown)
 RATE_LIMIT_EXTRA_DELAY = 12.0  # additional delay if 429 detected in wave
+AGENT_TIMEOUT_SECONDS = 60.0  # per-agent timeout to prevent hanging
 
 # Domain-specific evidence keywords for filtering
 DOMAIN_EVIDENCE_KEYWORDS: dict[str, list[str]] = {
@@ -258,7 +259,7 @@ class ExecutiveOrchestratorService:
         """Execute a single agent and update Board Context.
 
         Handles errors gracefully — a failed agent does not break
-        the entire orchestration.
+        the entire orchestration. Includes per-agent timeout protection.
         """
         # Mark agent as started in Board Context
         await self._board_context.mark_agent_started(session_id, agent_id)
@@ -275,8 +276,11 @@ class ExecutiveOrchestratorService:
 
             agent_request = request_cls(**request_kwargs)
 
-            # Execute the agent
-            response = await service.analyze(agent_request)
+            # Execute the agent with timeout protection
+            response = await asyncio.wait_for(
+                service.analyze(agent_request),
+                timeout=AGENT_TIMEOUT_SECONDS,
+            )
             response_dict = response.model_dump()
 
             elapsed_ms = int((time.perf_counter() - start) * 1000)
@@ -296,6 +300,28 @@ class ExecutiveOrchestratorService:
                 execution_time_ms=elapsed_ms,
                 status="completed",
                 error=None,
+            )
+
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            error_msg = f"Agent '{agent_id}' timed out after {AGENT_TIMEOUT_SECONDS}s"
+            logger.error(error_msg)
+
+            await self._board_context.update_agent_response(
+                session_id=session_id,
+                agent_id=agent_id,
+                response=None,
+                execution_time_ms=elapsed_ms,
+                status="timeout",
+                error=error_msg,
+            )
+
+            return AgentExecutionResult(
+                agent_id=agent_id,
+                response=None,
+                execution_time_ms=elapsed_ms,
+                status="timeout",
+                error=error_msg,
             )
 
         except Exception as e:

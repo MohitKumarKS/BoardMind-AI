@@ -70,7 +70,6 @@ class GroqProvider(BaseLLMProvider):
     FALLBACK_MODEL = "llama-3.3-70b-versatile"
 
     def __init__(self):
-        self._api_key: str | None = os.environ.get("GROQ_API_KEY")
         self._model: str = os.environ.get("GROQ_MODEL", self.PRIMARY_MODEL)
         self._client = None
         self._semaphore = asyncio.Semaphore(
@@ -79,13 +78,14 @@ class GroqProvider(BaseLLMProvider):
 
     @property
     def is_configured(self) -> bool:
-        return self._api_key is not None and len(self._api_key) > 0
+        api_key = os.environ.get("GROQ_API_KEY")
+        return api_key is not None and len(api_key) > 0
 
     def _get_client(self):
         """Lazy-initialize the Groq client."""
         if self._client is None:
             from groq import Groq
-            self._client = Groq(api_key=self._api_key)
+            self._client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
         return self._client
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
@@ -115,7 +115,8 @@ class GroqProvider(BaseLLMProvider):
                 raise
 
     async def _call_groq(
-        self, client, model: str, system_prompt: str, user_prompt: str
+        self, client, model: str, system_prompt: str, user_prompt: str,
+        max_tokens: int = 3072,
     ) -> str:
         """Execute a single Groq API call."""
         try:
@@ -127,7 +128,7 @@ class GroqProvider(BaseLLMProvider):
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0.3,
-                max_tokens=2048,
+                max_tokens=max_tokens,
                 response_format={"type": "json_object"},
             )
 
@@ -155,7 +156,7 @@ class GroqProvider(BaseLLMProvider):
                             {"role": "user", "content": user_prompt},
                         ],
                         temperature=0.3,
-                        max_tokens=2048,
+                        max_tokens=max_tokens,
                         response_format={"type": "json_object"},
                     )
                     content = response.choices[0].message.content
@@ -178,13 +179,13 @@ class OpenAIProvider(BaseLLMProvider):
     """
 
     def __init__(self):
-        self._api_key: str | None = os.environ.get("OPENAI_API_KEY")
         self._model: str = os.environ.get("OPENAI_MODEL", "gpt-4o")
         self._base_url: str = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
     @property
     def is_configured(self) -> bool:
-        return self._api_key is not None and len(self._api_key) > 0
+        api_key = os.environ.get("OPENAI_API_KEY")
+        return api_key is not None and len(api_key) > 0
 
     async def generate(self, system_prompt: str, user_prompt: str) -> str:
         if not self.is_configured:
@@ -195,11 +196,12 @@ class OpenAIProvider(BaseLLMProvider):
         try:
             import httpx
 
+            api_key = os.environ.get("OPENAI_API_KEY")
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self._base_url}/chat/completions",
                     headers={
-                        "Authorization": f"Bearer {self._api_key}",
+                        "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
                     json={
@@ -241,8 +243,12 @@ def get_provider() -> BaseLLMProvider:
 
     Selection logic:
     1. LLM_PROVIDER env var forces a specific backend
-    2. Otherwise: GROQ_API_KEY → Groq, OPENAI_API_KEY → OpenAI
-    3. If neither key exists, returns MockProvider → mock mode
+    2. Otherwise: returns GroqProvider (which lazy-checks GROQ_API_KEY)
+    3. If GROQ_API_KEY is not set at call time, GroqProvider.is_configured
+       returns False and agents fall back to mock responses.
+
+    Note: Provider checks env vars lazily at call time, not at construction.
+    This ensures dotenv loading order doesn't matter.
     """
     override = os.environ.get("LLM_PROVIDER", "").lower()
 
@@ -253,14 +259,9 @@ def get_provider() -> BaseLLMProvider:
     elif override == "groq":
         return GroqProvider()
 
-    # Auto-detect based on available keys
-    if os.environ.get("GROQ_API_KEY"):
-        return GroqProvider()
-    elif os.environ.get("OPENAI_API_KEY"):
-        return OpenAIProvider()
-
-    # No keys — mock mode
-    return MockProvider()
+    # Default: return GroqProvider which lazy-checks the key
+    # This works even if GROQ_API_KEY isn't set yet at import time
+    return GroqProvider()
 
 
 # Backward-compatible alias

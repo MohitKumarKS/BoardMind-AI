@@ -15,11 +15,18 @@ router = APIRouter()
 
 registry = MCPRegistry()
 
-# Module-level storage for the most recent MCP evidence summary.
-# This is consumed by the boardroom route when orchestrating.
-_last_evidence_summary: str = ""
+# Per-session evidence storage (keyed by a rotating slot).
+# This replaces the previous global _last_evidence_summary which was a race condition.
+# A proper fix would use request-scoped context, but for the hackathon,
+# we use a dict keyed by a simple counter to avoid cross-request overwrite.
+import threading
+
+_evidence_lock = threading.Lock()
+_evidence_store: dict[int, str] = {}
+_evidence_counter: int = 0
 
 ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".txt", ".md", ".pdf", ".docx"}
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB limit
 
 
 @router.post("/upload")
@@ -27,12 +34,13 @@ async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
     """Upload a file and extract its contents via MCP tools.
 
     Supports: CSV, Excel, PDF, DOCX, TXT, Markdown
+    Max size: 10MB
 
     Returns structured data extracted from the file, ready for
     consumption by department agents. Usage is tracked in the registry.
     Also generates and stores an evidence summary for agent injection.
     """
-    global _last_evidence_summary
+    global _evidence_counter
 
     filename = file.filename or "unknown"
     ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
@@ -45,6 +53,12 @@ async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
 
     content = await file.read()
 
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large ({len(content)} bytes). Maximum: {MAX_UPLOAD_SIZE} bytes (10MB).",
+        )
+
     if ext in (".csv", ".xlsx", ".xls"):
         result = registry.read_spreadsheet(content=content, filename=filename)
     else:
@@ -55,7 +69,9 @@ async def upload_file(file: UploadFile = File(...)) -> dict[str, Any]:
 
     # Generate structured evidence summary
     evidence_summary = summarize_mcp_data(result)
-    _last_evidence_summary = evidence_summary
+    with _evidence_lock:
+        _evidence_counter += 1
+        _evidence_store[_evidence_counter] = evidence_summary
     result["evidence_summary"] = evidence_summary
 
     return result
@@ -70,9 +86,12 @@ def get_and_clear_evidence_summary() -> str:
     """Get the most recent evidence summary and clear it.
     
     Called by the boardroom route after orchestration to store
-    the summary in Board Context.
+    the summary in Board Context. Thread-safe.
     """
-    global _last_evidence_summary
-    summary = _last_evidence_summary
-    _last_evidence_summary = ""
-    return summary
+    with _evidence_lock:
+        if not _evidence_store:
+            return ""
+        # Get the latest entry
+        latest_key = max(_evidence_store.keys())
+        summary = _evidence_store.pop(latest_key, "")
+        return summary

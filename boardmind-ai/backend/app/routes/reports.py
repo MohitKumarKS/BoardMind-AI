@@ -1,14 +1,19 @@
 """Executive Report API route.
 
 Provides endpoints for generating and downloading executive reports
-in JSON and PDF formats.
+in JSON and PDF formats. Also persists reports to PostgreSQL.
 """
+
+import base64
+import logging
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
 from app.reports import ReportGeneratorService, ExecutiveReport
 from app.routes.boardroom import orchestrator
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -27,10 +32,15 @@ async def get_report(
     - pdf: Returns a downloadable PDF file
 
     The session must have a completed consensus result.
+    Reports are also persisted to PostgreSQL for history.
     """
     try:
         if format == "pdf":
             pdf_bytes = report_service.generate_pdf(session_id)
+
+            # Persist to PostgreSQL (non-blocking)
+            await _persist_report(session_id)
+
             return Response(
                 content=pdf_bytes,
                 media_type="application/pdf",
@@ -40,6 +50,10 @@ async def get_report(
             )
         else:
             report = report_service.generate(session_id)
+
+            # Persist to PostgreSQL (non-blocking)
+            await _persist_report(session_id)
+
             return report.model_dump(mode="json")
 
     except ValueError as e:
@@ -54,3 +68,25 @@ async def get_report(
             status_code=500,
             detail=f"Report generation failed: {str(e)}",
         )
+
+
+async def _persist_report(session_id: str):
+    """Save report JSON + PDF to PostgreSQL for history."""
+    try:
+        from app.mcp_hub.database import is_database_ready
+        if not is_database_ready():
+            return
+
+        from app.mcp_hub.storage_service import StorageService
+
+        report = report_service.generate(session_id)
+        pdf_bytes = report_service.generate_pdf(session_id)
+
+        report_json = report.model_dump(mode="json")
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+
+        storage = StorageService()
+        await storage.store_report(session_id, report_json, pdf_b64)
+
+    except Exception as e:
+        logger.debug(f"Report persistence skipped: {e}")

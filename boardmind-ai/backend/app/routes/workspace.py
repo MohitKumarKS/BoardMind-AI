@@ -2,8 +2,11 @@
 
 Provides endpoints for single-agent analysis in Department Workspace mode.
 Each agent operates independently — no orchestration or consensus.
+Results are persisted to MCP Knowledge Hub when available.
 """
 
+import uuid
+import logging
 from fastapi import APIRouter, HTTPException
 
 from app.agents.finance import FinanceAgentService, FinanceAgentRequest, FinanceAgentResponse
@@ -15,6 +18,8 @@ from app.agents.legal import LegalAgentService, LegalAgentRequest, LegalAgentRes
 from app.agents.it import ITAgentService, ITAgentRequest, ITAgentResponse
 from app.agents.business_analytics import AnalyticsAgentService, AnalyticsAgentRequest, AnalyticsAgentResponse
 from app.agents.finance.service import LLMError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -28,11 +33,37 @@ it_service = ITAgentService()
 analytics_service = AnalyticsAgentService()
 
 
+async def _persist_workspace_analysis(agent_id: str, scenario: str, response_dict: dict):
+    """Persist a single workspace analysis to PostgreSQL (non-blocking)."""
+    try:
+        from app.mcp_hub.database import is_database_ready
+        if not is_database_ready():
+            return
+        from app.mcp_hub.storage_service import StorageService
+        storage = StorageService()
+        session_id = str(uuid.uuid4())
+        await storage.store_meeting(
+            meeting_id=session_id,
+            proposal=scenario,
+            business_category=f"workspace_{agent_id}",
+            title=f"[{agent_id.upper()}] {scenario[:100]}",
+        )
+        await storage.store_analysis(
+            meeting_id=session_id,
+            executive_role=agent_id,
+            response=response_dict,
+        )
+    except Exception as e:
+        logger.debug(f"Workspace persistence skipped: {e}")
+
+
 @router.post("/finance", response_model=FinanceAgentResponse)
 async def analyze_finance(request: FinanceAgentRequest) -> FinanceAgentResponse:
     """Submit a business proposal for Finance (CFO) analysis."""
     try:
-        return await finance_service.analyze(request)
+        response = await finance_service.analyze(request)
+        await _persist_workspace_analysis("finance", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -43,7 +74,9 @@ async def analyze_finance(request: FinanceAgentRequest) -> FinanceAgentResponse:
 async def analyze_marketing(request: MarketingAgentRequest) -> MarketingAgentResponse:
     """Submit a business proposal for Marketing (CMO) analysis."""
     try:
-        return await marketing_service.analyze(request)
+        response = await marketing_service.analyze(request)
+        await _persist_workspace_analysis("marketing", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -54,7 +87,9 @@ async def analyze_marketing(request: MarketingAgentRequest) -> MarketingAgentRes
 async def analyze_sales(request: SalesAgentRequest) -> SalesAgentResponse:
     """Submit a business proposal for Sales (CRO) analysis."""
     try:
-        return await sales_service.analyze(request)
+        response = await sales_service.analyze(request)
+        await _persist_workspace_analysis("sales", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -65,7 +100,9 @@ async def analyze_sales(request: SalesAgentRequest) -> SalesAgentResponse:
 async def analyze_hr(request: HRAgentRequest) -> HRAgentResponse:
     """Submit a business proposal for HR (CHRO) analysis."""
     try:
-        return await hr_service.analyze(request)
+        response = await hr_service.analyze(request)
+        await _persist_workspace_analysis("hr", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -76,7 +113,9 @@ async def analyze_hr(request: HRAgentRequest) -> HRAgentResponse:
 async def analyze_operations(request: OperationsAgentRequest) -> OperationsAgentResponse:
     """Submit a business proposal for Operations (COO) analysis."""
     try:
-        return await operations_service.analyze(request)
+        response = await operations_service.analyze(request)
+        await _persist_workspace_analysis("operations", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -87,7 +126,9 @@ async def analyze_operations(request: OperationsAgentRequest) -> OperationsAgent
 async def analyze_legal(request: LegalAgentRequest) -> LegalAgentResponse:
     """Submit a business proposal for Legal (GC) analysis."""
     try:
-        return await legal_service.analyze(request)
+        response = await legal_service.analyze(request)
+        await _persist_workspace_analysis("legal", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -98,7 +139,9 @@ async def analyze_legal(request: LegalAgentRequest) -> LegalAgentResponse:
 async def analyze_it(request: ITAgentRequest) -> ITAgentResponse:
     """Submit a business proposal for IT (CTO) analysis."""
     try:
-        return await it_service.analyze(request)
+        response = await it_service.analyze(request)
+        await _persist_workspace_analysis("it", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
@@ -109,7 +152,9 @@ async def analyze_it(request: ITAgentRequest) -> ITAgentResponse:
 async def analyze_analytics(request: AnalyticsAgentRequest) -> AnalyticsAgentResponse:
     """Submit a business proposal for Business Analytics (CDO) analysis."""
     try:
-        return await analytics_service.analyze(request)
+        response = await analytics_service.analyze(request)
+        await _persist_workspace_analysis("business_analytics", request.scenario, response.model_dump())
+        return response
     except LLMError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except ValueError as e:
