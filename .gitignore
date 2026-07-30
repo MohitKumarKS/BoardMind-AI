@@ -1,3 +1,11 @@
+# Environment files (contain secrets)
+.env
+.env.*
+!.env.example
+
+# Specs (development artifacts)
+.specs/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -13,11 +21,6 @@ build/
 
 # Node
 node_modules/
-dist/
-.env
-.env.local
-.env.*
-!.env.example
 
 # IDE
 .vscode/
@@ -29,9 +32,6 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
-
-# Specs (development only)
-.specs/
 
 # Database
 *.db

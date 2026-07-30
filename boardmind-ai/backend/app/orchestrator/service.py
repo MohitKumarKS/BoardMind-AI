@@ -15,7 +15,6 @@ It is purely a coordination layer and the ONLY writer to Board Context.
 
 import asyncio
 import logging
-import os
 import time
 import uuid
 from typing import Any
@@ -30,18 +29,6 @@ from app.agents.operations import OperationsAgentService, OperationsAgentRequest
 from app.agents.legal import LegalAgentService, LegalAgentRequest
 from app.agents.it import ITAgentService, ITAgentRequest
 from app.agents.business_analytics import AnalyticsAgentService, AnalyticsAgentRequest
-from app.agents.ceo import CEOAgentService, CEOAgentRequest
-from app.agents.ciso import CISOAgentService, CISOAgentRequest
-from app.agents.risk import RiskAgentService, RiskAgentRequest
-from app.agents.compliance import ComplianceAgentService, ComplianceAgentRequest
-from app.agents.strategy import StrategyAgentService, StrategyAgentRequest
-from app.agents.product import ProductAgentService, ProductAgentRequest
-from app.agents.customer_success import CustomerSuccessAgentService, CustomerSuccessAgentRequest
-from app.agents.supply_chain import SupplyChainAgentService, SupplyChainAgentRequest
-from app.agents.esg import ESGAgentService, ESGAgentRequest
-from app.agents.ai_governance import AIGovernanceAgentService, AIGovernanceAgentRequest
-from app.agents.innovation import InnovationAgentService, InnovationAgentRequest
-from app.agents.investor_relations import InvestorRelationsAgentService, InvestorRelationsAgentRequest
 
 from .schema import (
     OrchestratorRequest,
@@ -52,14 +39,11 @@ from .schema import (
 
 logger = logging.getLogger(__name__)
 
-# Wave configuration: production-optimized for 20 agents
-# Strategy: small waves with proper backoff allow all agents to get real LLM responses
-# The retry logic handles rate limits via exponential backoff
-WAVE_SIZE = int(os.environ.get("WAVE_SIZE", "3"))  # 3 agents per wave
-INTER_WAVE_BASE_DELAY = float(os.environ.get("INTER_WAVE_DELAY", "10.0"))  # 10s between waves (TPM recovery)
-RATE_LIMIT_EXTRA_DELAY = 8.0  # additional delay if 429 detected in wave
-AGENT_TIMEOUT_SECONDS = float(os.environ.get("AGENT_TIMEOUT", "45.0"))  # 45s to allow retries
-INTRA_WAVE_STAGGER = 1.0  # 1s stagger between agent starts within wave
+# Wave configuration: agents are split into waves to avoid TPM limits
+WAVE_SIZE = 4
+INTER_WAVE_BASE_DELAY = 5.0  # seconds between waves (minimum cooldown)
+RATE_LIMIT_EXTRA_DELAY = 12.0  # additional delay if 429 detected in wave
+AGENT_TIMEOUT_SECONDS = 60.0  # per-agent timeout to prevent hanging
 
 # Domain-specific evidence keywords for filtering
 DOMAIN_EVIDENCE_KEYWORDS: dict[str, list[str]] = {
@@ -71,18 +55,6 @@ DOMAIN_EVIDENCE_KEYWORDS: dict[str, list[str]] = {
     "legal": ["compliance", "regulation", "gdpr", "contract", "privacy", "liability", "ip", "governance", "soc"],
     "it": ["technology", "system", "cloud", "security", "platform", "infrastructure", "api", "data", "software"],
     "business_analytics": ["metric", "kpi", "growth", "average", "total", "percent", "benchmark", "forecast", "data"],
-    "ceo": ["strategy", "vision", "priority", "stakeholder", "competitive", "leadership", "direction", "growth", "transformation"],
-    "ciso": ["security", "cyber", "threat", "vulnerability", "breach", "encryption", "attack", "soc2", "iso27001", "nist", "access"],
-    "risk": ["risk", "probability", "exposure", "mitigation", "scenario", "monte carlo", "appetite", "tolerance", "downside"],
-    "compliance": ["regulation", "compliance", "gdpr", "hipaa", "sox", "pci", "audit", "governance", "policy", "standard"],
-    "strategy": ["market", "competitive", "strategy", "positioning", "growth", "tam", "differentiation", "moat", "advantage"],
-    "product": ["product", "feature", "roadmap", "user", "mvp", "adoption", "retention", "ux", "nps", "backlog"],
-    "customer_success": ["customer", "churn", "retention", "nps", "csat", "satisfaction", "onboarding", "health score", "renewal"],
-    "supply_chain": ["supply", "vendor", "procurement", "logistics", "inventory", "warehouse", "fulfillment", "lead time", "sourcing"],
-    "esg": ["carbon", "emission", "sustainability", "esg", "climate", "diversity", "governance", "green", "social", "environmental"],
-    "ai_governance": ["ai", "bias", "fairness", "ethics", "algorithmic", "explainability", "model", "ml", "responsible ai", "governance"],
-    "innovation": ["innovation", "r&d", "research", "patent", "emerging", "prototype", "breakthrough", "novel", "experiment"],
-    "investor_relations": ["investor", "shareholder", "earnings", "eps", "guidance", "analyst", "market cap", "dividend", "valuation"],
 }
 
 
@@ -150,18 +122,6 @@ class ExecutiveOrchestratorService:
             "legal": (LegalAgentService(), LegalAgentRequest),
             "it": (ITAgentService(), ITAgentRequest),
             "business_analytics": (AnalyticsAgentService(), AnalyticsAgentRequest),
-            "ceo": (CEOAgentService(), CEOAgentRequest),
-            "ciso": (CISOAgentService(), CISOAgentRequest),
-            "risk": (RiskAgentService(), RiskAgentRequest),
-            "compliance": (ComplianceAgentService(), ComplianceAgentRequest),
-            "strategy": (StrategyAgentService(), StrategyAgentRequest),
-            "product": (ProductAgentService(), ProductAgentRequest),
-            "customer_success": (CustomerSuccessAgentService(), CustomerSuccessAgentRequest),
-            "supply_chain": (SupplyChainAgentService(), SupplyChainAgentRequest),
-            "esg": (ESGAgentService(), ESGAgentRequest),
-            "ai_governance": (AIGovernanceAgentService(), AIGovernanceAgentRequest),
-            "innovation": (InnovationAgentService(), InnovationAgentRequest),
-            "investor_relations": (InvestorRelationsAgentService(), InvestorRelationsAgentRequest),
         }
         self._last_rate_limit_time: float = 0
 
@@ -174,12 +134,11 @@ class ExecutiveOrchestratorService:
         """Execute the full orchestration workflow with wave-based scheduling.
 
         1. Route scenario via Decision Router
-        2. If include_all_agents=True, use all 20 agents
-        3. Create Board Context session
-        4. Split agents into waves of WAVE_SIZE
-        5. Execute each wave with parallel agents, sequential waves
-        6. Apply dynamic inter-wave delay based on rate limit detection
-        7. Finalize session and return aggregated results
+        2. Create Board Context session
+        3. Split agents into waves of WAVE_SIZE
+        4. Execute each wave with parallel agents, sequential waves
+        5. Apply dynamic inter-wave delay based on rate limit detection
+        6. Finalize session and return aggregated results
         """
         session_id = str(uuid.uuid4())
 
@@ -187,33 +146,26 @@ class ExecutiveOrchestratorService:
         router_request = DecisionRouterRequest(scenario=request.scenario)
         routing = self._router.route(router_request)
 
-        # Step 2: Determine agent list
-        if request.include_all_agents:
-            # Full board meeting — all 20 executives participate
-            recommended_agents = list(self._agents.keys())
-        else:
-            recommended_agents = routing.recommended_agents
-
         logger.info(
             f"Session {session_id}: Category='{routing.business_category}', "
-            f"Agents={len(recommended_agents)} ({'full board' if request.include_all_agents else 'selective'})"
+            f"Agents={routing.recommended_agents}"
         )
 
-        # Step 3: Create Board Context session
+        # Step 2: Create Board Context session
         self._board_context.create_session(
             session_id=session_id,
             scenario=request.scenario,
             business_category=routing.business_category,
-            selected_agents=recommended_agents,
+            selected_agents=routing.recommended_agents,
             optional_context=request.optional_context,
         )
 
-        # Step 4: Wave-based execution
+        # Step 3: Wave-based execution
         start_time = time.perf_counter()
 
         valid_agents = [
             agent_id
-            for agent_id in recommended_agents
+            for agent_id in routing.recommended_agents
             if agent_id in self._agents
         ]
 
@@ -236,17 +188,14 @@ class ExecutiveOrchestratorService:
                 f"executing {wave_agents}"
             )
 
-            # Execute wave agents with staggered starts to prevent burst
-            tasks = []
-            for idx, agent_id in enumerate(wave_agents):
-                # Stagger start: each agent delayed by INTRA_WAVE_STAGGER * idx
-                tasks.append(
-                    self._execute_agent_staggered(
-                        session_id, agent_id, request.scenario,
-                        _filter_evidence_for_agent(request.optional_context, agent_id),
-                        delay=INTRA_WAVE_STAGGER * idx,
-                    )
+            # Execute wave agents in parallel
+            tasks = [
+                self._execute_agent(
+                    session_id, agent_id, request.scenario,
+                    _filter_evidence_for_agent(request.optional_context, agent_id)
                 )
+                for agent_id in wave_agents
+            ]
 
             wave_results = await asyncio.gather(*tasks)
             all_results.extend(wave_results)
@@ -258,15 +207,15 @@ class ExecutiveOrchestratorService:
 
         total_time_ms = int((time.perf_counter() - start_time) * 1000)
 
-        # Step 5: Finalize Board Context
+        # Step 4: Finalize Board Context
         await self._board_context.finalize_session(session_id, total_time_ms)
 
-        # Step 6: Build execution summary
+        # Step 5: Build execution summary
         completed = sum(1 for r in all_results if r.status == "completed")
         failed = sum(1 for r in all_results if r.status != "completed")
 
         summary = ExecutionSummary(
-            total_agents_selected=len(recommended_agents),
+            total_agents_selected=len(routing.recommended_agents),
             total_agents_completed=completed,
             total_agents_failed=failed,
             total_execution_time_ms=total_time_ms,
@@ -281,7 +230,7 @@ class ExecutiveOrchestratorService:
             session_id=session_id,
             scenario=request.scenario,
             business_category=routing.business_category,
-            selected_agents=recommended_agents,
+            selected_agents=routing.recommended_agents,
             execution_summary=summary,
             responses=all_results,
         )
@@ -289,29 +238,16 @@ class ExecutiveOrchestratorService:
     def _calculate_inter_wave_delay(self) -> float:
         """Calculate dynamic delay between waves.
 
-        Only adds extra delay if a recent 429 was detected.
-        Otherwise uses minimal delay to maximize throughput.
+        If a recent 429 was detected, add extra delay.
+        Otherwise use the base delay.
         """
         now = time.perf_counter()
         time_since_rate_limit = now - self._last_rate_limit_time
 
-        if time_since_rate_limit < 20:
+        if time_since_rate_limit < 30:
             # Recent rate limit — add extra cooldown
             return INTER_WAVE_BASE_DELAY + RATE_LIMIT_EXTRA_DELAY
         return INTER_WAVE_BASE_DELAY
-
-    async def _execute_agent_staggered(
-        self,
-        session_id: str,
-        agent_id: str,
-        scenario: str,
-        context: str | None,
-        delay: float = 0.0,
-    ) -> AgentExecutionResult:
-        """Execute agent with an initial stagger delay to prevent burst."""
-        if delay > 0:
-            await asyncio.sleep(delay)
-        return await self._execute_agent(session_id, agent_id, scenario, context)
 
     async def _execute_agent(
         self,
@@ -322,8 +258,8 @@ class ExecutiveOrchestratorService:
     ) -> AgentExecutionResult:
         """Execute a single agent and update Board Context.
 
-        Uses compact prompts for production efficiency, falling through
-        to the agent's standard analyze() as backup.
+        Handles errors gracefully — a failed agent does not break
+        the entire orchestration. Includes per-agent timeout protection.
         """
         # Mark agent as started in Board Context
         await self._board_context.mark_agent_started(session_id, agent_id)

@@ -98,30 +98,25 @@ class GroqProvider(BaseLLMProvider):
         client = self._get_client()
 
         async with self._semaphore:
+            # Try primary model first
             try:
                 return await self._call_groq(client, self._model, system_prompt, user_prompt)
             except LLMError as e:
                 error_msg = str(e)
-                # If rate limited, propagate immediately (don't waste time with fallback)
-                if "429" in error_msg or "rate_limit" in error_msg.lower():
-                    raise
                 # If model not available, try fallback
                 if "model" in error_msg.lower() and self._model != self.FALLBACK_MODEL:
                     logger.warning(
                         f"Primary model '{self._model}' failed, "
                         f"falling back to '{self.FALLBACK_MODEL}'"
                     )
-                    try:
-                        return await self._call_groq(
-                            client, self.FALLBACK_MODEL, system_prompt, user_prompt
-                        )
-                    except LLMError:
-                        raise  # Fallback also failed, propagate to retry/mock
+                    return await self._call_groq(
+                        client, self.FALLBACK_MODEL, system_prompt, user_prompt
+                    )
                 raise
 
     async def _call_groq(
         self, client, model: str, system_prompt: str, user_prompt: str,
-        max_tokens: int = 1024,
+        max_tokens: int = 3072,
     ) -> str:
         """Execute a single Groq API call."""
         try:
@@ -148,7 +143,32 @@ class GroqProvider(BaseLLMProvider):
         except Exception as e:
             error_msg = str(e)
 
-            raise LLMError(f"Groq API error: {error_msg}")
+            # Retry once on rate limit errors
+            if "429" in error_msg or "rate_limit" in error_msg.lower():
+                logger.warning(f"Groq rate limited, retrying in 8s...")
+                await asyncio.sleep(8)
+                try:
+                    response = await asyncio.to_thread(
+                        client.chat.completions.create,
+                        model=model,
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        temperature=0.3,
+                        max_tokens=max_tokens,
+                        response_format={"type": "json_object"},
+                    )
+                    content = response.choices[0].message.content
+                    if content:
+                        return content
+                    raise LLMError("Groq returned empty on retry")
+                except LLMError:
+                    raise
+                except Exception as retry_e:
+                    raise LLMError(f"Groq retry failed: {retry_e}")
+
+            raise LLMError(f"Groq invocation failed: {error_msg}")
 
 
 class OpenAIProvider(BaseLLMProvider):

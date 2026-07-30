@@ -28,7 +28,7 @@ VALID_ENUMS = {
     "change_complexity": {"low", "medium", "high"},
     "execution_complexity": {"low", "medium", "high"},
     "capacity_impact": {"within capacity", "stretch", "overload"},
-    "compliance_status": {"compliant", "non-compliant", "requires_review", "non_compliant", "requires_review"},
+    "compliance_status": {"compliant", "non-compliant", "requires_review"},
     "ip_implications": {"none", "minor", "significant"},
     "feasibility": {"straightforward", "moderate", "complex", "infeasible"},
     "security_risk": {"low", "medium", "high", "critical"},
@@ -38,14 +38,6 @@ VALID_ENUMS = {
     "evidence_strength": {"strong", "moderate", "weak", "insufficient"},
     "data_availability": {"available", "partially_available", "not_available"},
     "projection_confidence": {"high", "medium", "low"},
-    # New agent enums
-    "strategic_priority": {"low", "medium", "high", "critical"},
-    "operational_risk": {"low", "medium", "high", "critical"},
-    "customer_risk": {"low", "medium", "high"},
-    "esg_risk": {"low", "medium", "high", "critical"},
-    "ai_risk_level": {"low", "medium", "high", "critical"},
-    "innovation_risk": {"low", "medium", "high"},
-    "investor_sentiment": {"positive", "neutral", "negative", "mixed"},
 }
 
 
@@ -204,23 +196,6 @@ def normalize_agent_response(data: dict[str, Any]) -> dict[str, Any]:
             "payback_period", "timeline_estimate", "resource_requirements",
             "market_opportunity", "revenue_upside", "revenue_risk",
             "liability_exposure", "timeline_to_readiness",
-            # New agent fields
-            "strategic_alignment", "stakeholder_impact", "competitive_positioning",
-            "execution_priority", "threat_exposure", "data_protection_impact",
-            "compliance_posture", "security_investment", "risk_exposure",
-            "probability_assessment", "mitigation_strategy", "residual_risk",
-            "regulatory_impact", "compliance_gaps", "remediation_effort",
-            "audit_readiness", "market_opportunity", "competitive_advantage",
-            "strategic_fit", "product_market_fit", "roadmap_impact",
-            "user_experience", "build_vs_buy", "customer_impact",
-            "retention_risk", "satisfaction_forecast", "support_requirements",
-            "supply_chain_impact", "vendor_dependency", "logistics_complexity",
-            "procurement_needs", "environmental_impact", "social_impact",
-            "governance_implications", "sustainability_score",
-            "ethical_risk", "transparency_requirements", "governance_framework",
-            "societal_impact", "innovation_potential", "technology_readiness",
-            "research_requirements", "ip_opportunity", "market_perception",
-            "earnings_impact", "shareholder_value", "communication_strategy",
         ]
         for field in da_string_fields:
             if field in da and not isinstance(da[field], str):
