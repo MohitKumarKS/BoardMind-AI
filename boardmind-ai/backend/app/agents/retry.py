@@ -1,15 +1,13 @@
 """Shared retry logic for all agent services.
 
-Provides a decorator/helper that wraps LLM invocation with retry
+Provides retry with exponential backoff for rate limits
 and graceful fallback to mock responses on repeated failures.
-
-Defect fixed: Only the Analytics agent had retry logic. All other
-agents would crash on Groq JSON validation failures, truncated
-responses, or transient LLM errors.
 """
 
+import asyncio
 import json
 import logging
+import re
 from typing import Any, Callable, Awaitable, TypeVar
 
 from app.agents.llm_provider import LLMError
@@ -18,7 +16,9 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-MAX_RETRIES = 2
+MAX_RETRIES = 3
+BASE_BACKOFF = 2.0
+MAX_BACKOFF = 15.0
 
 
 async def retry_llm_call(
@@ -29,18 +29,11 @@ async def retry_llm_call(
     parse_fn: Callable[[str], T],
     fallback_fn: Callable[[], T],
 ) -> T:
-    """Execute an LLM call with retry and fallback.
+    """Execute an LLM call with exponential backoff retry.
 
-    Args:
-        agent_id: Agent identifier for logging.
-        llm_generate: The LLM provider's generate method.
-        system_prompt: System prompt for the agent.
-        user_prompt: User prompt with scenario.
-        parse_fn: Function to parse and validate the raw response.
-        fallback_fn: Function that returns a mock response on failure.
-
-    Returns:
-        Parsed and validated agent response, or mock fallback.
+    - Rate limits (429): backoff and retry up to MAX_RETRIES
+    - Parse errors: retry once
+    - After all retries exhausted: fall back to mock response
     """
     last_error: Exception | None = None
 
@@ -48,27 +41,43 @@ async def retry_llm_call(
         try:
             raw_response = await llm_generate(system_prompt, user_prompt)
             return parse_fn(raw_response)
-        except (LLMError, json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
+
+        except LLMError as e:
             last_error = e
             error_msg = str(e)
 
-            if "json_validate_failed" in error_msg or "failed_generation" in error_msg:
+            # Rate limit: exponential backoff
+            if "429" in error_msg or "rate_limit" in error_msg.lower():
+                backoff = min(BASE_BACKOFF * (2 ** (attempt - 1)), MAX_BACKOFF)
+                # Parse suggested wait time from Groq error
+                retry_match = re.search(r'try again in ([\d.]+)s', error_msg)
+                if retry_match:
+                    backoff = min(float(retry_match.group(1)) + 0.5, MAX_BACKOFF)
                 logger.warning(
-                    f"{agent_id} agent: Groq JSON validation failed "
-                    f"(attempt {attempt}/{MAX_RETRIES}), retrying..."
+                    f"{agent_id}: rate limited (attempt {attempt}/{MAX_RETRIES}), "
+                    f"backing off {backoff:.1f}s"
                 )
-            elif isinstance(e, (json.JSONDecodeError, ValueError, TypeError, KeyError)):
-                logger.warning(
-                    f"{agent_id} agent: parse error "
-                    f"(attempt {attempt}/{MAX_RETRIES}): {error_msg}, retrying..."
-                )
-            else:
-                # Non-retryable LLM error (auth failure, etc.)
-                raise
+                await asyncio.sleep(backoff)
+                continue
 
-    # All retries exhausted — fall back to mock
+            # Other LLM errors: retry once
+            if attempt < MAX_RETRIES:
+                logger.warning(f"{agent_id}: LLM error (attempt {attempt}), retrying")
+                await asyncio.sleep(1)
+                continue
+
+        except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
+            last_error = e
+            if attempt < MAX_RETRIES:
+                logger.warning(
+                    f"{agent_id}: parse error (attempt {attempt}/{MAX_RETRIES}), retrying"
+                )
+                await asyncio.sleep(0.5)
+                continue
+
+    # All retries exhausted — fallback
     logger.error(
-        f"{agent_id} agent failed after {MAX_RETRIES} attempts: {last_error}. "
+        f"{agent_id} failed after {MAX_RETRIES} attempts: {last_error}. "
         "Falling back to mock response."
     )
     return fallback_fn()
